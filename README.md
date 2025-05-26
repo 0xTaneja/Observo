@@ -113,26 +113,6 @@ Real-time data integration with:
 - **Jupiter Aggregator**: Solana DEX trading execution
 - **Multiple DEXs**: Best price routing across decentralized exchanges
 
-## 🛠️ Features Deep Dive
-
-### Signal Analysis Dashboard
-- **Recent Signals**: View your last 50 trading signals
-- **Performance Stats**: Track accuracy and profitability
-- **Token Discovery**: Automatic detection of new tokens
-- **Confidence Scoring**: 1-10 scale for signal reliability
-
-### Real Trading Features
-- **Live Quotes**: Real-time trading quotes from Jupiter
-- **Swap Execution**: Execute actual trades on Solana
-- **Balance Tracking**: Monitor wallet balances across tokens
-- **Transaction History**: Complete trading history and links
-
-### Risk Management
-- **Slippage Protection**: Configurable slippage tolerance
-- **Amount Validation**: Minimum trade amount checks
-- **Scam Detection**: AI-powered fraud identification
-- **User Confirmation**: All trades require explicit approval
-
 ## 📁 Project Structure
 
 ```
