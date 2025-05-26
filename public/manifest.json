@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "QuickAlpha",
+  "name": "Observo",
   "version": "1.0.0",
   "description": "AI-powered crypto trading signals for Twitter",
   "permissions": [
@@ -14,8 +14,13 @@
   ],
   "content_scripts": [
     {
-      "matches": ["https://twitter.com/*", "https://x.com/*"],
-      "js": ["content.js"],
+      "matches": [
+        "https://twitter.com/*",
+        "https://x.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
   ],
@@ -25,13 +30,28 @@
   },
   "action": {
     "default_popup": "popup/index.html",
-    "default_title": "QuickAlpha",
-    "default_icon": "icon.svg"
+    "default_title": "Observo",
+    "default_icon": "observo-logo.png"
   },
   "web_accessible_resources": [
     {
-      "resources": ["popup/*", "icon.svg"],
-      "matches": ["https://twitter.com/*", "https://x.com/*"]
+      "resources": [
+        "popup/*", 
+        "observo-logo.png",
+        "icon.svg", 
+        "swap.js",
+        "swap-standalone.html",
+        "swap-standalone.js",
+        "injected.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
-  ]
+  ],
+  "icons": {
+    "16": "observo-logo.png",
+    "48": "observo-logo.png",
+    "128": "observo-logo.png"
+}
 }

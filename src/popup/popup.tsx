@@ -1,15 +1,10 @@
 import * as React from 'react';
 import { useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
-import { SolanaAgentKit, KeypairWallet } from 'solana-agent-kit';
-import { TokenSwap } from '../components/TokenSwap';
 import './popup.css';
-import { Keypair } from '@solana/web3.js';
-
 interface Settings {
   enabled: boolean;
 }
-
 interface RecentSignal {
   action: string;
   token: string;
@@ -23,9 +18,8 @@ interface RecentSignal {
     hypeLanguage: string[];
   };
 }
-
 const Popup: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'settings' | 'signals' | 'swap'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'settings' | 'signals'>('dashboard');
   const [settings, setSettings] = useState<Settings>({
     enabled: true
   });
@@ -33,40 +27,112 @@ const Popup: React.FC = () => {
   const [stats, setStats] = useState({
     totalSignals: 0,
     buySignals: 0,
+    sellSignals: 0,
+    holdSignals: 0,
     avoidSignals: 0,
     accuracy: 0
   });
-  const [agent, setAgent] = useState<SolanaAgentKit | null>(null);
+  const [walletConnected, setWalletConnected] = useState<boolean>(false);
+  const [walletAddress, setWalletAddress] = useState<string | null>(null);
+  const [walletError, setWalletError] = useState<string | null>(null);
   const [signalsError, setSignalsError] = useState<string | null>(null);
-
+  const [connectedWallet, setConnectedWallet] = useState<any>(null);
+  const [activeFilter, setActiveFilter] = useState<'all' | 'buy' | 'sell' | 'hold' | 'avoid' | 'high-confidence'>('all');
+  const [searchTerm, setSearchTerm] = useState<string>('');
   useEffect(() => {
     loadSettings();
     loadRecentSignals();
     loadStats();
-    initializeSolanaAgent();
+    loadWalletState();
   }, []);
-
-  const initializeSolanaAgent = async () => {
+  const loadWalletState = async () => {
     try {
-      const keypair = Keypair.generate();
-      const wallet = new KeypairWallet(keypair, 'https://api.mainnet-beta.solana.com');
-
-      const agent = new SolanaAgentKit(
-        wallet,
-        'https://api.mainnet-beta.solana.com',
-        {
-          OPENAI_API_KEY: process.env.OPENAI_API_KEY || ''
-        }
-      );
-
-      // For now, use the agent without the DeFi plugin
-      // We'll implement direct OKX API integration
-      setAgent(agent);
+      const result = await chrome.storage.local.get(['walletConnected', 'walletAddress', 'walletProvider']);
+      if (result.walletConnected && result.walletAddress) {
+        setWalletConnected(true);
+        setWalletAddress(result.walletAddress);
+        console.log('📱 Wallet state loaded from storage:', {
+          address: result.walletAddress,
+          provider: result.walletProvider
+        });
+      }
     } catch (error) {
-      console.error('Error initializing Solana agent:', error);
+      console.error('Error loading wallet state:', error);
     }
   };
-
+  const openSwapInNewTab = () => {
+    connectWalletViaContentScript();
+  };
+  const connectWalletViaContentScript = async () => {
+    try {
+      chrome.tabs.query({ url: ["https://twitter.com/*", "https://x.com/*"] }, async (tabs) => {
+        if (tabs.length > 0) {
+          const twitterTab = tabs[0];
+          chrome.tabs.sendMessage(twitterTab.id!, {
+            type: 'CONNECT_WALLET_REQUEST'
+          }, (response) => {
+            if (response && response.success) {
+              handleWalletConnectionSuccess(response);
+            } else {
+              openTwitterSwapInterface(twitterTab.id!);
+            }
+          });
+        } else {
+          chrome.tabs.create({ 
+            url: 'https://twitter.com/home'
+          }, (tab) => {
+            setTimeout(() => {
+              if (tab.id) {
+                chrome.tabs.sendMessage(tab.id, {
+                  type: 'SHOW_SWAP_INTERFACE'
+                });
+              }
+            }, 3000);
+          });
+        }
+      });
+    } catch (error) {
+      console.error('Error connecting wallet via content script:', error);
+      showFallbackInstructions();
+    }
+  };
+  const openTwitterSwapInterface = (tabId: number) => {
+    chrome.tabs.sendMessage(tabId, {
+      type: 'SHOW_SWAP_INTERFACE'
+    });
+    chrome.tabs.update(tabId, { active: true });
+  };
+  const handleWalletConnectionSuccess = (response: any) => {
+    setWalletConnected(true);
+    setWalletAddress(response.walletAddress);
+    setWalletError(null);
+    chrome.storage.local.set({
+      walletConnected: true,
+      walletAddress: response.walletAddress,
+      walletProvider: response.walletProvider
+    });
+    console.log('✅ Wallet connected via Twitter content script!');
+    console.log('Address:', response.walletAddress);
+    console.log('Provider:', response.walletProvider);
+    alert(`✅ Wallet Connected!\n\nAddress: ${response.walletAddress.slice(0, 8)}...\nProvider: ${response.walletProvider.toUpperCase()}\n\nTrading signals are now ready!`);
+  };
+  const showFallbackInstructions = () => {
+    setWalletError(`
+🔄 Wallet Connection Steps:
+1. Open Twitter/X in a new tab
+2. Click the extension icon again  
+3. The wallet will connect on Twitter where it works properly
+4. Trading signals will then work with one-click buy!
+This ensures seamless integration between wallet and trading signals.
+    `);
+  };
+  const disconnectWallet = () => {
+    setWalletConnected(false);
+    setWalletAddress(null);
+    setWalletError(null);
+    setConnectedWallet(null);
+    chrome.storage.local.remove(['walletConnected', 'walletAddress', 'walletProvider']);
+  };
   const loadSettings = async () => {
     try {
       const result = await chrome.storage.sync.get(['quickalphaSettings']);
@@ -77,37 +143,30 @@ const Popup: React.FC = () => {
       console.error('Error loading settings:', error);
     }
   };
-
   const saveSettings = async () => {
     try {
       await chrome.storage.sync.set({ quickalphaSettings: settings });
-      
-      // Send settings to background script
       chrome.runtime.sendMessage({
         type: 'UPDATE_SETTINGS',
         settings: settings
       });
-      
       alert('Settings saved successfully!');
     } catch (error) {
       console.error('Error saving settings:', error);
       alert('Error saving settings');
     }
   };
-
   const loadRecentSignals = async () => {
     try {
       setSignalsError(null);
-      // Request signals from background script
       chrome.runtime.sendMessage({ type: 'GET_RECENT_SIGNALS' }, (response) => {
         if (chrome.runtime.lastError) {
           console.error('Chrome runtime error:', chrome.runtime.lastError);
           setSignalsError('Failed to communicate with background script');
           return;
         }
-        
         if (response && response.success) {
-          setRecentSignals(response.signals.slice(0, 10)); // Last 10 signals
+          setRecentSignals(response.signals.slice(0, 10)); 
           console.log('Loaded signals:', response.signals);
         } else {
           console.error('Failed to load signals:', response?.error);
@@ -119,14 +178,21 @@ const Popup: React.FC = () => {
       setSignalsError('Error loading signals: ' + String(error));
     }
   };
-
   const loadStats = async () => {
     try {
-      // Request stats from background script
       chrome.runtime.sendMessage({ type: 'GET_STATS' }, (response) => {
         if (response && response.success) {
-          setStats(response.stats);
-          console.log('Loaded stats:', response.stats);
+          const updatedStats = {
+            totalSignals: 0,
+            buySignals: 0,
+            sellSignals: 0,
+            holdSignals: 0,
+            avoidSignals: 0,
+            accuracy: 0,
+            ...response.stats
+          };
+          setStats(updatedStats);
+          console.log('Loaded stats:', updatedStats);
         } else {
           console.error('Failed to load stats:', response?.error);
         }
@@ -135,25 +201,29 @@ const Popup: React.FC = () => {
       console.error('Error loading stats:', error);
     }
   };
-
   const toggleExtension = async () => {
     const newSettings = { ...settings, enabled: !settings.enabled };
     setSettings(newSettings);
     await chrome.storage.sync.set({ quickalphaSettings: newSettings });
-    
     chrome.runtime.sendMessage({
       type: 'TOGGLE_EXTENSION',
       enabled: newSettings.enabled
     });
   };
-
   const clearData = async () => {
     if (confirm('Are you sure you want to clear all data? This cannot be undone.')) {
       try {
         chrome.runtime.sendMessage({ type: 'CLEAR_DATA' }, (response) => {
           if (response && response.success) {
             setRecentSignals([]);
-            setStats({ totalSignals: 0, buySignals: 0, avoidSignals: 0, accuracy: 0 });
+            setStats({ 
+              totalSignals: 0, 
+              buySignals: 0, 
+              sellSignals: 0,
+              holdSignals: 0,
+              avoidSignals: 0, 
+              accuracy: 0 
+            });
             alert('Data cleared successfully!');
           } else {
             alert('Error clearing data');
@@ -165,24 +235,21 @@ const Popup: React.FC = () => {
       }
     }
   };
-
   const formatTimestamp = (timestamp: number) => {
     return new Date(timestamp).toLocaleString();
   };
-
   const getActionColor = (action: string) => {
     switch (action.toLowerCase()) {
       case 'buy': return '#10b981';
       case 'sell': return '#ef4444';
+      case 'hold': return '#f59e0b';
       case 'avoid': return '#6b7280';
-      case 'invert': return '#f59e0b';
+      case 'invert': return '#8b5cf6';
       default: return '#6b7280';
     }
   };
-
   const openDetailedAnalysis = (signal: RecentSignal) => {
     try {
-      // Prepare signal data for the details page
       const signalData = {
         signal: {
           token: signal.token,
@@ -198,33 +265,74 @@ const Popup: React.FC = () => {
         },
         timestamp: signal.timestamp
       };
-
-      // Encode the signal data for URL
       const encodedData = encodeURIComponent(JSON.stringify(signalData));
-      
-      // Open the details page in a new tab
       const detailsUrl = chrome.runtime.getURL(`popup/details.html?signal=${encodedData}`);
       chrome.tabs.create({ url: detailsUrl });
-      
     } catch (error) {
       console.error('Error opening detailed analysis:', error);
       alert('Failed to open detailed analysis');
     }
   };
-
+  const filterSignals = (signals: RecentSignal[]) => {
+    let filteredSignals = [...signals];
+    switch (activeFilter) {
+      case 'buy':
+        filteredSignals = filteredSignals.filter(signal => 
+          signal.action?.toLowerCase() === 'buy'
+        );
+        break;
+      case 'sell':
+        filteredSignals = filteredSignals.filter(signal => 
+          signal.action?.toLowerCase() === 'sell'
+        );
+        break;
+      case 'hold':
+        filteredSignals = filteredSignals.filter(signal => 
+          signal.action?.toLowerCase() === 'hold'
+        );
+        break;
+      case 'avoid':
+        filteredSignals = filteredSignals.filter(signal => 
+          signal.action?.toLowerCase() === 'avoid'
+        );
+        break;
+      case 'high-confidence':
+        filteredSignals = filteredSignals.filter(signal => 
+          (signal.confidence || 0) >= 80
+        );
+        break;
+      case 'all':
+      default:
+        break;
+    }
+    if (searchTerm.trim()) {
+      filteredSignals = filteredSignals.filter(signal =>
+        signal.token?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        signal.action?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        signal.explanation?.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+    }
+    return filteredSignals;
+  };
+  const handleFilterChange = (filter: 'all' | 'buy' | 'sell' | 'hold' | 'avoid' | 'high-confidence') => {
+    setActiveFilter(filter);
+  };
+  const handleSearchChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setSearchTerm(event.target.value);
+  };
+  const filteredSignals = filterSignals(recentSignals);
   return (
     <div className="popup-container">
       <div className="popup-header">
         <div className="logo">
           <span className="logo-icon">⚡</span>
-          <span className="logo-text">QuickAlpha</span>
+          <span className="logo-text">Observo</span>
         </div>
         <div className="status-indicator">
           <div className={`status-dot ${settings.enabled ? 'active' : 'inactive'}`}></div>
           <span className="status-text">{settings.enabled ? 'Active' : 'Inactive'}</span>
         </div>
       </div>
-
       <div className="tab-navigation">
         <button 
           className={`tab-btn ${activeTab === 'dashboard' ? 'active' : ''}`}
@@ -239,22 +347,53 @@ const Popup: React.FC = () => {
           🔔 Signals
         </button>
         <button 
-          className={`tab-btn ${activeTab === 'swap' ? 'active' : ''}`}
-          onClick={() => setActiveTab('swap')}
-        >
-          💱 Swap
-        </button>
-        <button 
           className={`tab-btn ${activeTab === 'settings' ? 'active' : ''}`}
           onClick={() => setActiveTab('settings')}
         >
           ⚙️ Settings
         </button>
       </div>
-
       <div className="tab-content">
         {activeTab === 'dashboard' && (
           <div className="dashboard-container">
+            {}
+            <div className="wallet-connection-section">
+              <h3 className="section-title">Wallet Connection</h3>
+              {walletConnected && walletAddress ? (
+                <div className="connected-wallet">
+                  <div className="wallet-status">
+                    <div className="wallet-connected">
+                      <div className="status-icon">✅</div>
+                      <div className="wallet-details">
+                        <div className="wallet-label">Connected Wallet</div>
+                        <div className="wallet-address">{walletAddress.slice(0, 8)}...{walletAddress.slice(-8)}</div>
+                      </div>
+                      <button className="disconnect-btn" onClick={disconnectWallet}>
+                        Disconnect
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="wallet-connection">
+                  <div className="wallet-options">
+                    <button className="connect-wallet-btn" onClick={openSwapInNewTab}>
+                      <div className="wallet-icon">🔗</div>
+                      <div className="wallet-info">
+                        <div className="wallet-name">Connect OKX Wallet</div>
+                        <div className="wallet-description">Connect via Twitter for signal trading</div>
+                      </div>
+                    </button>
+                  </div>
+                  {walletError && (
+                    <div className="wallet-error">
+                      <div className="error-icon">⚠️</div>
+                      <p>{walletError}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
             <div className="stats-grid">
               <div className="stat-card">
                 <div className="stat-icon">📈</div>
@@ -281,8 +420,7 @@ const Popup: React.FC = () => {
                 <span className="stat-trend">+2% this week</span>
               </div>
             </div>
-
-            {/* Performance Section */}
+            {}
             <div className="performance-section">
               <h3 className="section-title">Performance Overview</h3>
               <div className="performance-cards">
@@ -306,8 +444,7 @@ const Popup: React.FC = () => {
                 </div>
               </div>
             </div>
-
-            {/* Recent Activity */}
+            {}
             <div className="activity-section">
               <h3 className="section-title">Recent Activity</h3>
               <div className="activity-list">
@@ -337,18 +474,13 @@ const Popup: React.FC = () => {
                 </div>
               </div>
             </div>
-
-            {/* Quick Actions */}
+            {}
             <div className="quick-actions-section">
               <h3 className="section-title">Quick Actions</h3>
               <div className="quick-actions-grid">
                 <button className="quick-action-btn" onClick={() => setActiveTab('signals')}>
                   <div className="action-icon">🔔</div>
                   <span>View Signals</span>
-                </button>
-                <button className="quick-action-btn" onClick={() => setActiveTab('swap')}>
-                  <div className="action-icon">💱</div>
-                  <span>Token Swap</span>
                 </button>
                 <button className="quick-action-btn" onClick={loadRecentSignals}>
                   <div className="action-icon">🔄</div>
@@ -358,10 +490,13 @@ const Popup: React.FC = () => {
                   <div className="action-icon">⚙️</div>
                   <span>Settings</span>
                 </button>
+                <button className="quick-action-btn" onClick={walletConnected ? disconnectWallet : openSwapInNewTab}>
+                  <div className="action-icon">{walletConnected ? '🔌' : '🔗'}</div>
+                  <span>{walletConnected ? 'Disconnect' : 'Connect Wallet'}</span>
+                </button>
               </div>
             </div>
-
-            {/* Market Status */}
+            {}
             <div className="market-status-section">
               <h3 className="section-title">Market Status</h3>
               <div className="market-indicators">
@@ -381,7 +516,6 @@ const Popup: React.FC = () => {
             </div>
           </div>
         )}
-
         {activeTab === 'signals' && (
           <div className="signals-container">
             {signalsError ? (
@@ -401,36 +535,78 @@ const Popup: React.FC = () => {
               </div>
             ) : (
               <>
-                {/* Signals Header with Actions */}
+                {}
                 <div className="signals-header">
                   <div className="signals-title">
                     <h3>Trading Signals</h3>
-                    <span className="signals-count">{recentSignals ? recentSignals.length : 0} signals</span>
+                    <span className="signals-count">
+                      {filteredSignals ? filteredSignals.length : 0} of {recentSignals ? recentSignals.length : 0} signals
+                    </span>
                   </div>
                   <button className="refresh-signals-btn" onClick={loadRecentSignals}>
                     🔄 Refresh
                   </button>
                 </div>
-
-                {/* Filter Tabs */}
+                {}
                 <div className="signal-filters">
-                  <button className="filter-tab active">All</button>
-                  <button className="filter-tab">Buy</button>
-                  <button className="filter-tab">Avoid</button>
-                  <button className="filter-tab">High Confidence</button>
+                  <button 
+                    className={`filter-tab ${activeFilter === 'all' ? 'active' : ''}`}
+                    onClick={() => handleFilterChange('all')}
+                  >
+                    All ({recentSignals.length})
+                  </button>
+                  <button 
+                    className={`filter-tab ${activeFilter === 'buy' ? 'active' : ''}`}
+                    onClick={() => handleFilterChange('buy')}
+                  >
+                    Buy ({recentSignals.filter(s => s.action?.toLowerCase() === 'buy').length})
+                  </button>
+                  <button 
+                    className={`filter-tab ${activeFilter === 'sell' ? 'active' : ''}`}
+                    onClick={() => handleFilterChange('sell')}
+                  >
+                    Sell ({recentSignals.filter(s => s.action?.toLowerCase() === 'sell').length})
+                  </button>
+                  <button 
+                    className={`filter-tab ${activeFilter === 'hold' ? 'active' : ''}`}
+                    onClick={() => handleFilterChange('hold')}
+                  >
+                    Hold ({recentSignals.filter(s => s.action?.toLowerCase() === 'hold').length})
+                  </button>
+                  <button 
+                    className={`filter-tab ${activeFilter === 'avoid' ? 'active' : ''}`}
+                    onClick={() => handleFilterChange('avoid')}
+                  >
+                    Avoid ({recentSignals.filter(s => s.action?.toLowerCase() === 'avoid').length})
+                  </button>
+                  <button 
+                    className={`filter-tab ${activeFilter === 'high-confidence' ? 'active' : ''}`}
+                    onClick={() => handleFilterChange('high-confidence')}
+                  >
+                    High Confidence ({recentSignals.filter(s => (s.confidence || 0) >= 80).length})
+                  </button>
                 </div>
-
-                {/* Search Bar */}
+                {}
                 <div className="search-container">
                   <span className="search-icon">🔍</span>
                   <input 
                     type="text" 
                     placeholder="Search signals by token..." 
                     className="search-input"
+                    value={searchTerm}
+                    onChange={handleSearchChange}
                   />
+                  {searchTerm && (
+                    <button 
+                      className="clear-search-btn" 
+                      onClick={() => setSearchTerm('')}
+                      title="Clear search"
+                    >
+                      ✕
+                    </button>
+                  )}
                 </div>
-
-                {/* Signals List */}
+                {}
                 <div className="signals-list">
                   {!recentSignals || recentSignals.length === 0 ? (
                     <div className="empty-signals">
@@ -441,8 +617,25 @@ const Popup: React.FC = () => {
                         Enable Monitoring
                       </button>
                     </div>
-                  ) : (
-                    recentSignals.map((signal, index) => {
+                  ) : filteredSignals.length === 0 ? (
+                    <div className="empty-signals">
+                      <div className="empty-icon">🔍</div>
+                      <h4>No signals found</h4>
+                      <p>
+                        {searchTerm ? `No signals match "${searchTerm}"` : `No ${activeFilter} signals available`}
+                      </p>
+                      <button 
+                        className="start-monitoring-btn" 
+                        onClick={() => {
+                          setSearchTerm('');
+                          setActiveFilter('all');
+                        }}
+                      >
+                        Clear Filters
+                      </button>
+                  </div>
+                ) : (
+                    filteredSignals.map((signal, index) => {
                       try {
                         return (
                           <div 
@@ -467,7 +660,6 @@ const Popup: React.FC = () => {
                                 {signal.action ? String(signal.action).toUpperCase() : 'UNKNOWN'}
                               </div>
                             </div>
-                            
                             <div className="signal-card-body">
                               <div className="confidence-section">
                                 <div className="confidence-label">Confidence Score</div>
@@ -483,7 +675,6 @@ const Popup: React.FC = () => {
                                 </div>
                                 <div className="confidence-value">{signal.confidence || 0}%</div>
                               </div>
-                              
                               {signal.explanation && (
                                 <div className="signal-explanation">
                                   <div className="explanation-label">Analysis</div>
@@ -493,7 +684,6 @@ const Popup: React.FC = () => {
                                 </div>
                               )}
                             </div>
-
                             <div className="signal-card-footer">
                               <div className="signal-tags">
                                 {signal.content?.tokens && Array.isArray(signal.content.tokens) && 
@@ -518,26 +708,21 @@ const Popup: React.FC = () => {
                     })
                   )}
                 </div>
-
-                {/* Load More Button */}
-                {recentSignals && recentSignals.length > 0 && (
+                {}
+                {filteredSignals && filteredSignals.length > 0 && (
                   <div className="load-more-section">
-                    <button className="load-more-btn">
+                    <button className="load-more-btn" onClick={loadRecentSignals}>
                       Load More Signals
                     </button>
+                    <p className="load-more-info">
+                      Showing {filteredSignals.length} of {recentSignals.length} signals
+                    </p>
                   </div>
                 )}
               </>
             )}
           </div>
         )}
-
-        {activeTab === 'swap' && agent && (
-          <div className="swap-container">
-            <TokenSwap agent={agent} />
-          </div>
-        )}
-
         {activeTab === 'settings' && (
           <div className="settings-container">
             <div className="setting-item">
@@ -562,11 +747,9 @@ const Popup: React.FC = () => {
     </div>
   );
 };
-
 const container = document.getElementById('root');
 if (container) {
   const root = createRoot(container);
   root.render(<Popup />);
 }
-
 export default Popup;
